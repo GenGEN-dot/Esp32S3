@@ -2,20 +2,17 @@
 
 // 状态变量
 bool ledState = false;
-bool lastButtonState = HIGH; // 按键上一次的状态
+bool lastButtonState = HIGH; // 按键上一次的状态，初始为高电平（因为上拉）
 bool buttonState; // 按键当前状态
 unsigned long lastDebounceTime = 0; // 上次抖动时间
 const unsigned long debounceDelay = 50; // 防抖延时(毫秒)
 
 void setup() {
-  pinMode(1, OUTPUT);
-  pinMode(4, OUTPUT);
-  pinMode(2, INPUT_PULLUP); // 启用内部上拉电阻，不接GND
+  pinMode(1, OUTPUT); // LED引脚
+  pinMode(2, INPUT_PULLUP); // 启用内部上拉电阻
 }
 
 void loop() {
-  digitalWrite(4, HIGH); //引脚4持续输出高电平到引脚2
-  
   bool reading = digitalRead(2); // 读取当前按键值
   
   // 防抖逻辑核心：如果读数发生变化，则重置防抖计时器
