@@ -1,106 +1,140 @@
 #include <WiFi.h>
 #include "time.h"
-#include <Arduino.h>
-#include <Adafruit_NeoPixel.h>
+#include <U8g2lib.h>
 
-#define LED_PIN     48
-#define NUM_LEDS    1
-#define BRIGHTNESS  45          // 亮度 0~255，建议 50~150 之间，太亮刺眼
+// ------------------- WiFi 配置 -------------------
+const char* ssid = "Netcore-2";        // 建议改为英文 SSID，避免兼容性问题
+const char* password = "560099999";
 
-Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
-
-// HSV 转 RGB，hue: 0~360, sat: 0~255, val: 0~255
-uint32_t hsvToRgb(uint16_t hue, uint8_t sat, uint8_t val) {
-    uint8_t r, g, b;
-    uint8_t region, remainder, p, q, t;
-    
-    if (sat == 0) {
-        r = g = b = val;
-    } else {
-        region = hue / 60;
-        remainder = (hue % 60) * 255 / 60;
-        
-        p = (val * (255 - sat)) >> 8;
-        q = (val * (255 - ((sat * remainder) >> 8))) >> 8;
-        t = (val * (255 - ((sat * (255 - remainder)) >> 8))) >> 8;
-        
-        switch (region) {
-            case 0: r = val; g = t; b = p; break;
-            case 1: r = q; g = val; b = p; break;
-            case 2: r = p; g = val; b = t; break;
-            case 3: r = p; g = q; b = val; break;
-            case 4: r = t; g = p; b = val; break;
-            default: r = val; g = p; b = q; break;
-        }
-    }
-    return strip.Color(r, g, b);
-}
-
-
-
-
-// --- 请替换为你的网络信息 ---
-const char* ssid = "你连你冯呢";
-const char* password = "888788888";
-// --------------------------
-
-// 选择稳定、快速的NTP服务器，例如中国区可以使用 "ntp.aliyun.com" 或 "cn.pool.ntp.org"
+// ------------------- NTP 配置 -------------------
 const char* ntpServer = "pool.ntp.org";
-// 时区偏移量（秒）：北京时间是UTC+8，所以偏移量是 8 * 3600 = 28800
-const long gmtOffset_sec = 28800;
-// 夏令时偏移量，中国不使用夏令时，设为0
-const int daylightOffset_sec = 0;
+const long  gmtOffset_sec = 28800;       // UTC+8
+const int   daylightOffset_sec = 0;
 
+// ------------------- 屏幕配置 -------------------
+U8G2_SSD1306_128X64_NONAME_1_SW_I2C u8g2(U8G2_R0, /*clock=*/5, /*data=*/4, /*reset=*/U8X8_PIN_NONE);
+
+// 存储时间的结构体
+struct tm timeinfo;
+
+// 非阻塞定时变量
+unsigned long lastPrintTime = 0;   // 上次打印/刷新的毫秒时间戳
+
+// ------------------- 函数声明 -------------------
+void drawMessage(const char* msg);
+void displayTime(struct tm * timeinfo);
+
+// ------------------- setup -------------------
 void setup() {
   Serial.begin(115200);
   
-  // 连接Wi-Fi
-  Serial.print("正在连接Wi-Fi");
+  u8g2.begin();
+  u8g2.setFont(u8g2_font_6x10_tf);
+  u8g2.setFlipMode(0);
+
+  drawMessage("Connecting WiFi...");
+  
   WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
+  int attempt = 0;
+  while (WiFi.status() != WL_CONNECTED && attempt < 20) {
     delay(500);
     Serial.print(".");
+    attempt++;
   }
-  Serial.println(" 已连接！");
-
-  // 配置并获取NTP时间
+  
+  if (WiFi.status() != WL_CONNECTED) {
+    drawMessage("WiFi Failed!");
+    Serial.println("WiFi连接失败，请检查账号密码");
+    while(1);
+  }
+  
+  drawMessage("WiFi OK, Syncing...");
+  Serial.println("\nWiFi已连接，正在同步时间...");
+  
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
   
-  // 等待时间同步成功
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)){
-    Serial.println("获取时间失败");
-    return;
+  int retry = 0;
+  while (!getLocalTime(&timeinfo) && retry < 20) {
+    delay(500);
+    Serial.print(".");
+    retry++;
   }
-  Serial.println("时间同步成功！");
-
-    strip.begin();
-    strip.setBrightness(BRIGHTNESS);
-    strip.show(); // 初始熄灭
+  
+  if (!getLocalTime(&timeinfo)) {
+    drawMessage("Time Sync Failed");
+    Serial.println("时间同步失败");
+    while(1);
+  }
+  
+  drawMessage("Time Ready!");
+  delay(1000);
+  Serial.println("时间同步成功");
+  
+  lastPrintTime = millis();   // 初始化定时基准
 }
 
+// ------------------- loop (非阻塞，每秒执行) -------------------
 void loop() {
-  struct tm timeinfo;
-  // 获取本地时间并格式化打印
-  if(getLocalTime(&timeinfo)){
-    Serial.println(&timeinfo, "%Y-%m-%d %H:%M:%S");
-  }
-  delay(1000);
-
-    static uint16_t hue = 0;          // 色相 0~360
-    static unsigned long lastTime = 0;
-    const unsigned long interval = 20; // 每 20ms 变化一次，控制渐变速度
+  unsigned long now = millis();
+  
+  // 每隔 1000 毫秒执行一次（精确间隔）
+  if (now - lastPrintTime >= 1000) {
+    lastPrintTime = now;   // 更新时间戳
     
-    if (millis() - lastTime >= interval) {
-        lastTime = millis();
-        
-        // 根据当前色相计算 RGB 并设置 LED
-        uint32_t color = hsvToRgb(hue, 255, 255); // 饱和度、亮度均最大，最终亮度由 setBrightness 控制
-        strip.setPixelColor(0, color);
-        strip.show();
-        
-        // 色相递增，实现平滑渐变
-        hue++;
-        if (hue >= 360) hue = 0;
+    if (getLocalTime(&timeinfo)) {
+      // 1. 串口打印
+      char timeStr[30];
+      strftime(timeStr, sizeof(timeStr), "%Y-%m-%d %H:%M:%S", &timeinfo);
+      Serial.println(timeStr);
+      
+      // 2. 屏幕显示
+      displayTime(&timeinfo);
+    } else {
+      drawMessage("Time Error!");
+      Serial.println("获取时间失败");
     }
+  }
+  
+  // 让出 CPU，避免空转（可选，但推荐）
+  delay(1);
+}
+
+// ------------------- 函数实现 -------------------
+void displayTime(struct tm * timeinfo) {
+  u8g2.firstPage();
+  do {
+    u8g2.setCursor(0, 12);
+    u8g2.print("Date: ");
+    u8g2.print(timeinfo->tm_year + 1900);
+    u8g2.print("-");
+    u8g2.print(timeinfo->tm_mon + 1);
+    u8g2.print("-");
+    u8g2.println(timeinfo->tm_mday);
+    
+    u8g2.setCursor(0, 26);
+    u8g2.print("Week: ");
+    const char* weekdays[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    u8g2.println(weekdays[timeinfo->tm_wday]);
+    
+    u8g2.setFont(u8g2_font_helvB12_tf);
+    u8g2.setCursor(0, 48);
+    u8g2.print("Time: ");
+    u8g2.print(timeinfo->tm_hour);
+    u8g2.print(":");
+    if (timeinfo->tm_min < 10) u8g2.print("0");
+    u8g2.print(timeinfo->tm_min);
+    u8g2.print(":");
+    if (timeinfo->tm_sec < 10) u8g2.print("0");
+    u8g2.println(timeinfo->tm_sec);
+    
+    u8g2.setFont(u8g2_font_6x10_tf);
+  } while (u8g2.nextPage());
+}
+
+void drawMessage(const char* msg) {
+  u8g2.firstPage();
+  do {
+    u8g2.setCursor(0, 32);
+    u8g2.print(msg);
+  } while (u8g2.nextPage());
 }
